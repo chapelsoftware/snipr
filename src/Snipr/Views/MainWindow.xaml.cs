@@ -75,13 +75,11 @@ public partial class MainWindow : Window
             if (_viewModel.SelectedMode.IsVideo())
             {
                 ShowRecordingIndicator();
+                return; // Don't show main window during video recording
             }
         }
 
-        if (!_viewModel.IsRecording)
-        {
-            Show();
-        }
+        Show();
     }
 
     private void OnRequestRectangleSelection(object? sender, EventArgs e)
@@ -112,13 +110,11 @@ public partial class MainWindow : Window
             if (_viewModel.SelectedMode.IsVideo())
             {
                 ShowRecordingIndicator();
+                return; // Don't show main window during video recording
             }
         }
 
-        if (!_viewModel.IsRecording)
-        {
-            Show();
-        }
+        Show();
     }
 
     private void OnRequestShowPreview(object? sender, EventArgs e)
