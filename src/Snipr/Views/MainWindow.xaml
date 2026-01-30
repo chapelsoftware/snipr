@@ -7,6 +7,7 @@
         xmlns:models="clr-namespace:Snipr.Models"
         mc:Ignorable="d"
         Title="Snipr"
+        Icon="/snipr.ico"
         Width="450" Height="85"
         MinWidth="450" MinHeight="85"
         WindowStyle="SingleBorderWindow"
