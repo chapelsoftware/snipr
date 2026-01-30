@@ -1,0 +1,19 @@
+<Application x:Class="Snipr.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Snipr"
+             Startup="OnStartup">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- Theme dictionary loaded dynamically at runtime -->
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Converters -->
+            <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+            <local:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+            <local:InverseBoolConverter x:Key="InverseBoolConverter"/>
+            <local:CaptureModeToStringConverter x:Key="CaptureModeToStringConverter"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

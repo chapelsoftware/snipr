@@ -1,0 +1,50 @@
+<Window x:Class="Snipr.Views.FreeformSelectionOverlay"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize">
+
+    <Grid>
+        <!-- Desktop screenshot background -->
+        <Image x:Name="DesktopImage"
+               Stretch="None"
+               HorizontalAlignment="Left"
+               VerticalAlignment="Top"/>
+
+        <!-- Semi-transparent overlay -->
+        <Rectangle x:Name="DimOverlay" Fill="#60000000"/>
+
+        <!-- Canvas for drawing the freeform path -->
+        <Canvas x:Name="DrawingCanvas"
+                MouseLeftButtonDown="OnMouseLeftButtonDown"
+                MouseMove="OnMouseMove"
+                MouseLeftButtonUp="OnMouseLeftButtonUp"
+                Background="Transparent"/>
+
+        <!-- Selection path display -->
+        <Canvas x:Name="SelectionCanvas" IsHitTestVisible="False">
+            <Path x:Name="SelectionPath"
+                  Stroke="{DynamicResource AccentBrush}"
+                  StrokeThickness="2"
+                  Fill="#300078D4"
+                  StrokeDashArray="5,3"/>
+        </Canvas>
+
+        <!-- Instructions -->
+        <Border Background="#E0000000"
+                CornerRadius="0"
+                Padding="16,10"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,20,0,0">
+            <TextBlock Text="Draw a shape around the area you want to capture. Press ESC to cancel."
+                       Foreground="White"
+                       FontFamily="Segoe UI"
+                       FontSize="14"/>
+        </Border>
+    </Grid>
+</Window>

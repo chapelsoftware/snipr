@@ -1,10 +1,10 @@
-# SnipSnap
+# Snipr
 
 A lightweight Windows screenshot and screen recording application with a clean, native Windows 10 interface.
 
-![SnipSnap Main Window](screenshot1.png)
+![Snipr Main Window](screenshot1.png)
 
-![SnipSnap in Action](screenshot2.png)
+![Snipr in Action](screenshot2.png)
 
 ![Demo](demo.gif)
 
@@ -40,14 +40,14 @@ A lightweight Windows screenshot and screen recording application with a clean, 
 
 ```bash
 # Clone the repository
-git clone https://github.com/chapelsoftware/snipsnap.git
-cd snipsnap
+git clone https://github.com/chapelsoftware/snipr.git
+cd snipr
 
 # Build
 dotnet build -c Release -p:Platform=x64
 
 # Run
-dotnet run --project src/SnipSnap -p:Platform=x64
+dotnet run --project src/Snipr -p:Platform=x64
 ```
 
 ## Keyboard Shortcuts
@@ -62,7 +62,7 @@ dotnet run --project src/SnipSnap -p:Platform=x64
 
 ## Third-Party Libraries
 
-SnipSnap uses the following open-source libraries:
+Snipr uses the following open-source libraries:
 
 | Library | Version | License | Description |
 |---------|---------|---------|-------------|
