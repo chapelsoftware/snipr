@@ -1,0 +1,73 @@
+/* Snipr - Custom CSS Styling */
+
+/* Main window compact mode */
+.compact-toolbar {
+    padding: 6px;
+}
+
+/* Preview area */
+.preview-area {
+    background-color: @view_bg_color;
+    border-top: 1px solid @borders;
+}
+
+.preview-image {
+    margin: 8px;
+}
+
+/* Preview info bar */
+.preview-info {
+    padding: 6px 12px;
+    font-size: 0.9em;
+    color: @dim_label_color;
+}
+
+/* Selection overlay */
+.selection-overlay {
+    background-color: transparent;
+}
+
+.selection-dim {
+    background-color: rgba(0, 0, 0, 0.4);
+}
+
+/* Recording indicator */
+.recording-indicator {
+    padding: 8px 16px;
+    border-radius: 8px;
+}
+
+.recording-dot {
+    color: @error_color;
+    font-weight: bold;
+    font-size: 1.2em;
+}
+
+.recording-duration {
+    font-family: monospace;
+    font-size: 1.1em;
+    font-weight: bold;
+    padding: 0 8px;
+}
+
+/* Buttons */
+.capture-button {
+    padding: 4px 16px;
+}
+
+.destructive-action {
+    color: @error_color;
+}
+
+/* Mode dropdown */
+.mode-dropdown {
+    min-width: 160px;
+}
+
+/* Countdown overlay */
+.countdown-label {
+    font-size: 72px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}

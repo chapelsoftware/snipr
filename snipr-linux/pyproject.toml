@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "snipr"
+version = "1.0.0"
+description = "Screenshot and screen recording tool for Linux"
+requires-python = ">=3.11"
+dependencies = [
+    "PyGObject>=3.46",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+x11 = ["python-xlib>=0.33"]
+
+[project.scripts]
+snipr = "snipr.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["snipr*"]

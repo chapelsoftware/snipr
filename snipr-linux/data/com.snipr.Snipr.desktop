@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Snipr
+Comment=Screenshot and screen recording tool
+Exec=python3 -m snipr
+Icon=com.snipr.Snipr
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=screenshot;snip;capture;record;screen;
+StartupNotify=true

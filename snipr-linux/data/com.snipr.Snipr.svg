@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4A90D9"/>
+      <stop offset="100%" stop-color="#2E5FA1"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="128" height="128" rx="20" fill="url(#bg)"/>
+  <!-- Scissors/snip icon -->
+  <g fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Screen frame -->
+    <rect x="24" y="28" width="80" height="56" rx="4"/>
+    <!-- Screen stand -->
+    <line x1="52" y1="84" x2="52" y2="96"/>
+    <line x1="76" y1="84" x2="76" y2="96"/>
+    <line x1="40" y1="96" x2="88" y2="96"/>
+    <!-- Selection rectangle (dashed) -->
+    <rect x="38" y="40" width="36" height="28" rx="2" stroke-dasharray="4 3" stroke-width="3" stroke="rgba(255,255,255,0.9)"/>
+    <!-- Crosshair -->
+    <circle cx="56" cy="54" r="8" stroke-width="2.5"/>
+    <line x1="56" y1="44" x2="56" y2="48" stroke-width="2.5"/>
+    <line x1="56" y1="60" x2="56" y2="64" stroke-width="2.5"/>
+    <line x1="46" y1="54" x2="50" y2="54" stroke-width="2.5"/>
+    <line x1="62" y1="54" x2="66" y2="54" stroke-width="2.5"/>
+  </g>
+</svg>
