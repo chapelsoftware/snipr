@@ -36,10 +36,10 @@ class MainWindow(Adw.ApplicationWindow):
         super().__init__(
             title="Snipr",
             default_width=450,
-            default_height=85,
             resizable=False,
             **kwargs,
         )
+        self.set_size_request(450, -1)
 
         self._app = self.get_application()
         self._selected_mode = CaptureMode.RECTANGLE_SNIP
@@ -60,23 +60,33 @@ class MainWindow(Adw.ApplicationWindow):
         self._build_ui()
 
     def _build_ui(self):
-        # Toast overlay wraps everything
-        self._toast_overlay = Adw.ToastOverlay()
-        self.set_content(self._toast_overlay)
+        # Adw.ToolbarView manages header bar + content for AdwApplicationWindow
+        toolbar_view = Adw.ToolbarView()
 
-        # Main vertical box
+        # Header bar (just title + window controls)
+        header = Adw.HeaderBar()
+        header.set_title_widget(Gtk.Label(label="Snipr"))
+        toolbar_view.add_top_bar(header)
+
+        # Toast overlay wraps content
+        self._toast_overlay = Adw.ToastOverlay()
+
+        # Main vertical box for content below header
         self._main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._toast_overlay.set_child(self._main_box)
 
-        # Header bar
-        header = Adw.HeaderBar()
-        header.set_title_widget(Gtk.Label(label="Snipr"))
+        # Action toolbar with buttons
+        action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        action_bar.set_margin_start(8)
+        action_bar.set_margin_end(8)
+        action_bar.set_margin_top(6)
+        action_bar.set_margin_bottom(6)
 
         # New button
         self._new_btn = Gtk.Button(label="New")
         self._new_btn.add_css_class("suggested-action")
         self._new_btn.connect("clicked", self._on_new_clicked)
-        header.pack_start(self._new_btn)
+        action_bar.append(self._new_btn)
 
         # Mode dropdown
         mode_names = [m.display_name for m in AVAILABLE_MODES]
@@ -85,7 +95,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._mode_dropdown.set_selected(0)
         self._mode_dropdown.connect("notify::selected", self._on_mode_changed)
         self._mode_dropdown.add_css_class("mode-dropdown")
-        header.pack_start(self._mode_dropdown)
+        action_bar.append(self._mode_dropdown)
 
         # Delay dropdown
         delay_names = [f"{d}s" if d > 0 else "0s" for d in AVAILABLE_DELAYS]
@@ -93,9 +103,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._delay_dropdown = Gtk.DropDown(model=self._delay_model)
         self._delay_dropdown.set_selected(0)
         self._delay_dropdown.connect("notify::selected", self._on_delay_changed)
-        header.pack_start(self._delay_dropdown)
+        action_bar.append(self._delay_dropdown)
 
-        self._main_box.append(header)
+        self._main_box.append(action_bar)
+
+        toolbar_view.set_content(self._toast_overlay)
+        self.set_content(toolbar_view)
 
         # Preview area (hidden by default)
         self._preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -327,6 +340,7 @@ class MainWindow(Adw.ApplicationWindow):
             return
 
         self._video_saved = False
+        new_w, new_h = 450, 400
 
         if result.is_screenshot and result.screenshot:
             pixbuf = result.screenshot
@@ -349,8 +363,8 @@ class MainWindow(Adw.ApplicationWindow):
                     max_h = int(geom.height * 0.8)
                     aspect = pw / ph if ph else 1
                     new_w = min(pw + 32, max_w)
-                    new_h = min(int((new_w - 32) / aspect + 120), max_h)
-                    self.set_default_size(max(new_w, 450), new_h)
+                    new_h = min(int((new_w - 32) / aspect + 160), max_h)
+                    new_w = max(new_w, 450)
 
         elif result.is_video and result.video_path:
             media_file = Gtk.MediaFile.new_for_filename(result.video_path)
@@ -364,12 +378,13 @@ class MainWindow(Adw.ApplicationWindow):
             else:
                 size_str = f"{file_size / 1024:.0f} KB"
             self._info_label.set_text(f"Video - {size_str}")
-
-            self.set_default_size(640, 480)
+            new_w, new_h = 640, 480
 
         self._preview_box.set_visible(True)
         self._is_preview_visible = True
         self.set_resizable(True)
+        self.set_size_request(-1, -1)
+        self.set_default_size(new_w, new_h)
 
     def _hide_preview(self):
         self._preview_picture.set_paintable(None)
@@ -377,7 +392,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._preview_box.set_visible(False)
         self._is_preview_visible = False
         self.set_resizable(False)
-        self.set_default_size(450, 85)
+        # Force shrink back to compact size
+        self.set_default_size(450, -1)
+        self.set_size_request(450, -1)
 
         # Cleanup temp video if not saved
         if not self._video_saved and self._last_result and self._last_result.video_path:
