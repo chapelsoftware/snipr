@@ -1,5 +1,4 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Windows;
@@ -56,41 +55,6 @@ public class ScreenCaptureService : IScreenCaptureService
     {
         var bounds = ScreenHelper.GetVirtualScreenBounds();
         return CaptureRegion(bounds);
-    }
-
-    public BitmapSource CaptureFreeform(Rectangle bounds, GraphicsPath clipPath)
-    {
-        if (bounds.Width <= 0 || bounds.Height <= 0)
-            throw new ArgumentException("Bounds must have positive dimensions");
-
-        // Capture the bounding rectangle
-        using var fullBitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(fullBitmap))
-        {
-            graphics.CopyFromScreen(bounds.Location, System.Drawing.Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
-        }
-
-        // Create a new bitmap with transparency for the clipped result
-        var resultBitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(resultBitmap))
-        {
-            graphics.Clear(Color.Transparent);
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
-            // Translate path to local coordinates
-            using var translatedPath = (GraphicsPath)clipPath.Clone();
-            var matrix = new Matrix();
-            matrix.Translate(-bounds.X, -bounds.Y);
-            translatedPath.Transform(matrix);
-
-            // Set clip and draw
-            graphics.SetClip(translatedPath);
-            graphics.DrawImage(fullBitmap, 0, 0);
-        }
-
-        var source = ConvertToBitmapSource(resultBitmap);
-        resultBitmap.Dispose();
-        return source;
     }
 
     public Bitmap CaptureDesktopBitmap()

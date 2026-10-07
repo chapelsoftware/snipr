@@ -170,7 +170,7 @@ public class VideoRecordingService : IVideoRecordingService, IDisposable
                     Bitrate = 8000 * 1000,
                     Framerate = 30,
                     IsFixedFramerate = false,
-                    IsFragmentedMp4Enabled = true,
+                    IsFragmentedMp4Enabled = false,
                     IsLowLatencyEnabled = false,
                     IsHardwareEncodingEnabled = true
                 },

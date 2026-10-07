@@ -1,5 +1,4 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Snipr.Models;
 using Snipr.Services;
@@ -21,9 +20,6 @@ public partial class SelectionViewModel : ViewModelBase
 
     [ObservableProperty]
     private Rectangle _selectedRegion;
-
-    [ObservableProperty]
-    private GraphicsPath? _freeformPath;
 
     [ObservableProperty]
     private bool _isSelectionComplete;
@@ -51,13 +47,6 @@ public partial class SelectionViewModel : ViewModelBase
         }
     }
 
-    public void SetFreeformSelection(GraphicsPath path, Rectangle bounds)
-    {
-        FreeformPath = path;
-        SelectedRegion = bounds;
-        IsSelectionComplete = true;
-    }
-
     public void Cancel()
     {
         IsCancelled = true;
@@ -69,8 +58,6 @@ public partial class SelectionViewModel : ViewModelBase
         HoveredWindow = null;
         SelectedWindow = null;
         SelectedRegion = Rectangle.Empty;
-        FreeformPath?.Dispose();
-        FreeformPath = null;
         IsSelectionComplete = false;
         IsCancelled = false;
     }

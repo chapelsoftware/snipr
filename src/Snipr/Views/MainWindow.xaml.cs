@@ -12,6 +12,8 @@ namespace Snipr.Views;
 
 public partial class MainWindow : Window
 {
+    private const int PrintScreenHotKeyId = 1;
+
     private readonly MainViewModel _viewModel;
     private readonly IThemeService _themeService;
     private WindowSelectionOverlay? _windowOverlay;
@@ -46,6 +48,23 @@ public partial class MainWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         Win32Interop.ExcludeWindowFromCapture(hwnd);
         _themeService.Initialize(hwnd);
+
+        Win32Interop.RegisterHotKey(hwnd, PrintScreenHotKeyId, Win32Interop.MOD_NOREPEAT, Win32Interop.VK_SNAPSHOT);
+        HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == Win32Interop.WM_HOTKEY && wParam.ToInt32() == PrintScreenHotKeyId)
+        {
+            handled = true;
+            if (_windowOverlay == null && _rectangleOverlay == null && _recordingIndicator == null
+                && !_viewModel.IsDelayCountdownActive)
+            {
+                _viewModel.NewCaptureCommand.Execute(null);
+            }
+        }
+        return IntPtr.Zero;
     }
 
     private void OnRequestWindowSelection(object? sender, EventArgs e)
@@ -65,7 +84,7 @@ public partial class MainWindow : Window
 
         if (vm.IsCancelled)
         {
-            Show();
+            OnRequestShowMainWindow(this, EventArgs.Empty);
             return;
         }
 
@@ -79,7 +98,7 @@ public partial class MainWindow : Window
             }
         }
 
-        Show();
+        OnRequestShowMainWindow(this, EventArgs.Empty);
     }
 
     private void OnRequestRectangleSelection(object? sender, EventArgs e)
@@ -100,7 +119,7 @@ public partial class MainWindow : Window
 
         if (isCancelled)
         {
-            Show();
+            OnRequestShowMainWindow(this, EventArgs.Empty);
             return;
         }
 
@@ -114,13 +133,18 @@ public partial class MainWindow : Window
             }
         }
 
-        Show();
+        OnRequestShowMainWindow(this, EventArgs.Empty);
     }
 
     private void OnRequestShowPreview(object? sender, EventArgs e)
     {
         HideRecordingIndicator();
         ShowPreview();
+        if (_viewModel.LastCaptureResult?.IsScreenshot == true)
+        {
+            _viewModel.CopyToClipboard();
+        }
+        OnRequestShowMainWindow(this, EventArgs.Empty);
     }
 
     private void ShowPreview()
@@ -128,8 +152,10 @@ public partial class MainWindow : Window
         var result = _viewModel.LastCaptureResult;
         if (result == null) return;
 
+        // Replacing an existing preview: release and discard its unsaved video
+        VideoPlayer.Source = null;
+        DeleteUnsavedTempVideo();
         _videoSaved = false;
-        _tempVideoPath = null;
 
         // Store current size before expanding
         if (!_isPreviewVisible)
@@ -199,7 +225,17 @@ public partial class MainWindow : Window
         PreviewArea.Visibility = Visibility.Collapsed;
         PreviewToolbar.Visibility = Visibility.Collapsed;
 
-        // Clean up temp video if not saved
+        DeleteUnsavedTempVideo();
+        _isPreviewVisible = false;
+
+        // Restore compact size and disable resizing
+        ResizeMode = ResizeMode.CanMinimize;
+        Width = 450;
+        Height = 85;
+    }
+
+    private void DeleteUnsavedTempVideo()
+    {
         if (!_videoSaved && !string.IsNullOrEmpty(_tempVideoPath) && File.Exists(_tempVideoPath))
         {
             try
@@ -211,26 +247,23 @@ public partial class MainWindow : Window
                 // Ignore deletion errors
             }
         }
-
         _tempVideoPath = null;
-        _isPreviewVisible = false;
-
-        // Restore compact size and disable resizing
-        ResizeMode = ResizeMode.NoResize;
-        Width = 450;
-        Height = 85;
     }
 
     private void OnCopyClick(object sender, RoutedEventArgs e)
     {
         _viewModel.CopyToClipboard();
+        FlashButtonText(sender, "Copied!");
+    }
 
+    private static void FlashButtonText(object sender, string text)
+    {
         // Brief visual feedback
         var button = sender as System.Windows.Controls.Button;
         if (button != null)
         {
             var originalContent = button.Content;
-            button.Content = "Copied!";
+            button.Content = text;
             var timer = new System.Windows.Threading.DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(1)
@@ -262,7 +295,7 @@ public partial class MainWindow : Window
             {
                 if (_viewModel.SaveCapture(dialog.FileName))
                 {
-                    MessageBox.Show("Image saved successfully!", "Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+                    FlashButtonText(sender, "Saved!");
                 }
                 else
                 {
@@ -286,7 +319,7 @@ public partial class MainWindow : Window
                     VideoPlayer.Source = null;
                     File.Copy(result.VideoPath, dialog.FileName, true);
                     _videoSaved = true;
-                    MessageBox.Show("Video saved successfully!", "Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+                    FlashButtonText(sender, "Saved!");
                     VideoPlayer.Source = new Uri(result.VideoPath);
                 }
                 catch (Exception ex)
@@ -304,11 +337,24 @@ public partial class MainWindow : Window
 
     private void OnRequestHideMainWindow(object? sender, EventArgs e)
     {
-        Hide();
+        WindowState = WindowState.Minimized;
     }
 
     private void OnRequestShowMainWindow(object? sender, EventArgs e)
     {
+        WindowState = WindowState.Normal;
+        Show();
+        Activate();
+    }
+
+    public void BringToFront()
+    {
+        // Leave an in-progress selection or recording alone
+        if (_windowOverlay != null || _rectangleOverlay != null || _recordingIndicator != null)
+            return;
+
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
         Show();
         Activate();
     }
@@ -317,7 +363,14 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainViewModel.IsRecording))
         {
-            if (!_viewModel.IsRecording)
+            if (_viewModel.IsRecording)
+            {
+                if (_recordingIndicator == null)
+                {
+                    ShowRecordingIndicator();
+                }
+            }
+            else
             {
                 HideRecordingIndicator();
             }
@@ -349,18 +402,10 @@ public partial class MainWindow : Window
         _rectangleOverlay?.Close();
         _recordingIndicator?.Close();
 
-        // Clean up temp video if still exists
-        if (!_videoSaved && !string.IsNullOrEmpty(_tempVideoPath) && File.Exists(_tempVideoPath))
-        {
-            try
-            {
-                File.Delete(_tempVideoPath);
-            }
-            catch
-            {
-                // Ignore
-            }
-        }
+        Win32Interop.UnregisterHotKey(new WindowInteropHelper(this).Handle, PrintScreenHotKeyId);
+
+        VideoPlayer.Source = null;
+        DeleteUnsavedTempVideo();
 
         base.OnClosed(e);
     }

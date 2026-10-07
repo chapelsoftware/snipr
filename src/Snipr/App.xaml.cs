@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using Microsoft.Extensions.DependencyInjection;
+using Snipr.Helpers;
 using Snipr.Models;
 using Snipr.Services;
 using Snipr.ViewModels;
@@ -14,13 +15,33 @@ namespace Snipr;
 
 public partial class App : Application
 {
+    private const string InstanceMutexName = "Snipr.SingleInstance";
+    private const string ActivateEventName = "Snipr.ActivateInstance";
+
     private ServiceProvider? _serviceProvider;
     private IThemeService? _themeService;
+    private Mutex? _instanceMutex;
+    private EventWaitHandle? _activateEvent;
 
     public static IServiceProvider Services { get; private set; } = null!;
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
+        _instanceMutex = new Mutex(true, InstanceMutexName, out var isFirstInstance);
+        _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivateEventName);
+
+        if (!isFirstInstance)
+        {
+            Win32Interop.AllowSetForegroundWindow(Win32Interop.ASFW_ANY);
+            _activateEvent.Set();
+            Shutdown();
+            return;
+        }
+
+        ThreadPool.RegisterWaitForSingleObject(_activateEvent, (_, _) =>
+            Dispatcher.BeginInvoke(() => Services.GetRequiredService<MainWindow>().BringToFront()),
+            null, Timeout.Infinite, executeOnlyOnce: false);
+
         var services = new ServiceCollection();
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
@@ -98,6 +119,8 @@ public partial class App : Application
             _themeService.ThemeChanged -= OnThemeChanged;
         }
         _serviceProvider?.Dispose();
+        _activateEvent?.Dispose();
+        _instanceMutex?.Dispose();
         base.OnExit(e);
     }
 }

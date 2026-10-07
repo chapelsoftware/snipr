@@ -186,7 +186,6 @@ public partial class MainViewModel : ViewModelBase
         else
         {
             await _recordingService.StartRecordingFullScreenAsync();
-            RequestShowMainWindow?.Invoke(this, EventArgs.Empty);
         }
     }
 
