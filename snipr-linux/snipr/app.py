@@ -27,6 +27,23 @@ class SniprApplication(Adw.Application):
         self.hotkey_service: GlobalHotkeyService | None = None
         self.config: dict = snipr_config.load()
         self._main_window = None
+        self._fullscreen_on_activate = False
+        self.add_main_option(
+            "fullscreen", 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE,
+            "Take a full-screen screenshot now and show it in the preview", None,
+        )
+
+    def do_handle_local_options(self, options):
+        if not options.contains("fullscreen"):
+            return -1
+        # A running Snipr takes the capture; otherwise this process becomes
+        # Snipr and captures as soon as its window exists.
+        self.register(None)
+        if self.get_is_remote():
+            self.activate_action("fullscreen-snip", None)
+            return 0
+        self._fullscreen_on_activate = True
+        return -1
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -40,6 +57,14 @@ class SniprApplication(Adw.Application):
         Adw.Application.do_shutdown(self)
 
     def do_activate(self):
+        self._ensure_main_window()
+        if self._fullscreen_on_activate:
+            self._fullscreen_on_activate = False
+            self._main_window.start_fullscreen_capture()
+            return
+        self._main_window.present()
+
+    def _ensure_main_window(self):
         if self._main_window is None:
             self.capture_service = create_screen_capture_service()
             self.clipboard_service = ClipboardService()
@@ -49,8 +74,6 @@ class SniprApplication(Adw.Application):
 
             from snipr.ui.main_window import MainWindow
             self._main_window = MainWindow(application=self)
-
-        self._main_window.present()
 
     def apply_hotkey(self) -> bool:
         """(Re-)bind the global hotkey from config. Returns True on success."""
@@ -85,6 +108,10 @@ class SniprApplication(Adw.Application):
             self.add_action(action)
             self.set_accels_for_action(f"app.{name}", [accel])
 
+        fullscreen = Gio.SimpleAction.new("fullscreen-snip", None)
+        fullscreen.connect("activate", self._on_fullscreen_snip)
+        self.add_action(fullscreen)
+
     def _setup_theme(self):
         style_manager = Adw.StyleManager.get_default()
         style_manager.set_color_scheme(Adw.ColorScheme.PREFER_LIGHT)
@@ -107,6 +134,10 @@ class SniprApplication(Adw.Application):
     def _on_new_capture(self, action, param):
         if self._main_window:
             self._main_window.start_new_capture()
+
+    def _on_fullscreen_snip(self, action, param):
+        self._ensure_main_window()
+        self._main_window.start_fullscreen_capture()
 
     def _on_stop_recording(self, action, param):
         if self._main_window:

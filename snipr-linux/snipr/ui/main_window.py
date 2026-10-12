@@ -369,6 +369,16 @@ class MainWindow(Adw.ApplicationWindow):
             # Small delay to let window hide
             GLib.timeout_add(150, self._execute_capture)
 
+    def start_fullscreen_capture(self):
+        """Take a full-screen screenshot now, whatever mode and delay are selected."""
+        if self._app.video_service.state == RecordingState.RECORDING:
+            return
+
+        self._hide_preview()
+        self.set_visible(False)
+        # Small delay to let window hide
+        GLib.timeout_add(150, self._capture_fullscreen, CaptureMode.FULLSCREEN_SNIP)
+
     def _start_delay_countdown(self, remaining: int):
         if remaining <= 0:
             self._execute_capture()
@@ -427,21 +437,24 @@ class MainWindow(Adw.ApplicationWindow):
             self._on_overlay_cancelled,
         )
 
-    def _capture_fullscreen(self):
+    def _capture_fullscreen(self, mode: CaptureMode | None = None):
+        mode = mode or self._selected_mode
         try:
             cs = self._app.capture_service
-            if self._selected_mode.is_screenshot:
+            if mode.is_screenshot:
                 pixbuf = cs.capture_fullscreen()
                 # Dismiss any live popup/menu that was in the capture so its
                 # pointer grab doesn't swallow the first click in the preview.
                 _dismiss_active_popup()
                 self._last_result = CaptureResult(
-                    mode=self._selected_mode,
+                    mode=mode,
                     screenshot=pixbuf,
                     capture_region=(0, 0, pixbuf.get_width(), pixbuf.get_height()),
                 )
-                self.set_visible(True)
+                # Fill the preview before showing: GTK ignores a new default size
+                # once the window is mapped, so a first show would stay compact.
                 self._show_preview()
+                self.present()
             else:
                 # Fullscreen video
                 self._app.video_service.start_recording_fullscreen()
@@ -449,6 +462,7 @@ class MainWindow(Adw.ApplicationWindow):
         except Exception as e:
             self.set_visible(True)
             self._show_error(f"Capture failed: {e}")
+        return False  # Don't repeat GLib.timeout
 
     def _on_rectangle_selected(self, x: int, y: int, w: int, h: int):
         frozen = getattr(self, "_frozen_pixbuf", None)
@@ -466,8 +480,10 @@ class MainWindow(Adw.ApplicationWindow):
                     screenshot=pixbuf,
                     capture_region=(x, y, w, h),
                 )
-                self.set_visible(True)
+                # Fill the preview before showing: GTK ignores a new default size
+                # once the window is mapped, so a first show would stay compact.
                 self._show_preview()
+                self.present()
             else:
                 # Rectangle video
                 self._app.video_service.start_recording_region(x, y, w, h)
@@ -502,8 +518,10 @@ class MainWindow(Adw.ApplicationWindow):
                     capture_region=(window_info.x, window_info.y,
                                     window_info.width, window_info.height),
                 )
-                self.set_visible(True)
+                # Fill the preview before showing: GTK ignores a new default size
+                # once the window is mapped, so a first show would stay compact.
                 self._show_preview()
+                self.present()
             else:
                 # Window video
                 self._app.video_service.start_recording_window(
@@ -531,8 +549,10 @@ class MainWindow(Adw.ApplicationWindow):
                 screenshot=pixbuf,
                 capture_region=(x, y, w, h),
             )
-            self.set_visible(True)
+            # Fill the preview before showing: GTK ignores a new default size
+            # once the window is mapped, so a first show would stay compact.
             self._show_preview()
+            self.present()
         except Exception as e:
             self.set_visible(True)
             self._show_error(f"Capture failed: {e}")
@@ -882,8 +902,10 @@ class MainWindow(Adw.ApplicationWindow):
             mode=self._selected_mode,
             video_path=path,
         )
-        self.set_visible(True)
+        # Fill the preview before showing: GTK ignores a new default size
+        # once the window is mapped, so a first show would stay compact.
         self._show_preview()
+        self.present()
 
     def _on_recording_failed(self, error: str):
         self._hide_recording_indicator()
