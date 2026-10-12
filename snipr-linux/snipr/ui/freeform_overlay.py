@@ -1,4 +1,4 @@
-"""Fullscreen freeform selection overlay with Cairo drawing."""
+"""Freeform selection overlay spanning the full virtual (multi-monitor) screen."""
 
 from __future__ import annotations
 
@@ -7,29 +7,26 @@ from typing import Callable
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("GdkX11", "4.0")
 
-from gi.repository import Gdk, GdkPixbuf, Gtk
-import cairo
+from gi.repository import Gdk, GdkPixbuf, GdkX11, Gtk  # noqa: E402
+import cairo  # noqa: E402
+
+from snipr.ui.rectangle_overlay import _virtual_bounds_and_fs_range, _xlib_set_fs_monitors
 
 
 class FreeformSelectionOverlay(Gtk.Window):
-    """Fullscreen overlay for drawing a freeform selection polygon.
-
-    Shows the desktop screenshot and lets the user draw a freeform shape.
-    The enclosed region is captured with transparency outside the shape.
-    """
+    """Full-virtual-desktop overlay with a draw-polygon selection."""
 
     def __init__(
         self,
         capture_service,
         on_selected: Callable[[int, int, int, int, list[tuple[int, int]]], None],
         on_cancelled: Callable[[], None],
+        pre_captured=None,
+        **_legacy_kwargs,
     ):
-        super().__init__(
-            title="",
-            decorated=False,
-            modal=True,
-        )
+        super().__init__(title="", decorated=False, modal=True)
         self._capture_service = capture_service
         self._on_selected = on_selected
         self._on_cancelled = on_cancelled
@@ -37,17 +34,24 @@ class FreeformSelectionOverlay(Gtk.Window):
         self._is_drawing = False
         self._points: list[tuple[float, float]] = []
 
-        # Capture desktop
-        self._desktop_pixbuf = self._capture_service.capture_fullscreen()
+        vx, vy, _vw, _vh, fs_range = _virtual_bounds_and_fs_range()
+        self._origin_x, self._origin_y = vx, vy
+        self._fs_range = fs_range
 
-        self.fullscreen()
+        self._desktop_pixbuf = (
+            pre_captured if pre_captured is not None
+            else self._capture_service.capture_fullscreen()
+        )
+        self._screen_w = self._desktop_pixbuf.get_width()
+        self._screen_h = self._desktop_pixbuf.get_height()
+
+        self.set_default_size(self._screen_w, self._screen_h)
         self.set_cursor(Gdk.Cursor.new_from_name("crosshair", None))
 
         self._drawing_area = Gtk.DrawingArea()
         self._drawing_area.set_draw_func(self._on_draw)
         self.set_child(self._drawing_area)
 
-        # Input controllers
         click = Gtk.GestureClick()
         click.set_button(1)
         click.connect("pressed", self._on_press)
@@ -64,6 +68,18 @@ class FreeformSelectionOverlay(Gtk.Window):
 
         self._desktop_surface = self._pixbuf_to_surface(self._desktop_pixbuf)
 
+        self.connect("map", self._on_mapped)
+
+    def _on_mapped(self, _widget) -> None:
+        surface = self.get_surface()
+        if not isinstance(surface, GdkX11.X11Surface):
+            return
+        try:
+            _xlib_set_fs_monitors(surface.get_xid(), *self._fs_range)
+        except Exception as e:
+            print(f"[snipr-debug] freeform fs-monitors failed: {e}", flush=True)
+        self.fullscreen()
+
     def _pixbuf_to_surface(self, pixbuf: GdkPixbuf.Pixbuf) -> cairo.ImageSurface:
         w = pixbuf.get_width()
         h = pixbuf.get_height()
@@ -74,15 +90,11 @@ class FreeformSelectionOverlay(Gtk.Window):
         return surface
 
     def _on_draw(self, area, ctx: cairo.Context, width: int, height: int):
-        # Draw desktop
         ctx.set_source_surface(self._desktop_surface, 0, 0)
         ctx.paint()
-
-        # Dim overlay
         ctx.set_source_rgba(0, 0, 0, 0.4)
 
         if len(self._points) >= 3:
-            # Draw dim with hole for freeform shape
             ctx.rectangle(0, 0, width, height)
             ctx.new_sub_path()
             ctx.move_to(*self._points[0])
@@ -92,7 +104,6 @@ class FreeformSelectionOverlay(Gtk.Window):
             ctx.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
             ctx.fill()
 
-            # Draw the freeform path outline
             ctx.set_source_rgba(0.2, 0.5, 1.0, 0.9)
             ctx.set_line_width(2)
             ctx.move_to(*self._points[0])
@@ -102,7 +113,6 @@ class FreeformSelectionOverlay(Gtk.Window):
                 ctx.close_path()
             ctx.stroke()
         elif len(self._points) > 0:
-            # Just the line so far
             ctx.rectangle(0, 0, width, height)
             ctx.fill()
 
@@ -113,10 +123,8 @@ class FreeformSelectionOverlay(Gtk.Window):
                 ctx.line_to(px, py)
             ctx.stroke()
         else:
-            # Full dim with instructions
             ctx.rectangle(0, 0, width, height)
             ctx.fill()
-
             ctx.set_source_rgba(1, 1, 1, 0.8)
             ctx.set_font_size(18)
             text = "Click and drag to draw a freeform selection. Press Escape to cancel."
@@ -144,7 +152,6 @@ class FreeformSelectionOverlay(Gtk.Window):
             self._drawing_area.queue_draw()
             return
 
-        # Calculate bounding box
         xs = [p[0] for p in self._points]
         ys = [p[1] for p in self._points]
         bx = int(min(xs))
@@ -157,9 +164,10 @@ class FreeformSelectionOverlay(Gtk.Window):
             self._drawing_area.queue_draw()
             return
 
-        int_points = [(int(px), int(py)) for px, py in self._points]
+        ox, oy = self._origin_x, self._origin_y
+        int_points = [(int(px) + ox, int(py) + oy) for px, py in self._points]
         self.close()
-        self._on_selected(bx, by, bw, bh, int_points)
+        self._on_selected(bx + ox, by + oy, bw, bh, int_points)
 
     def _on_key_pressed(self, controller, keyval, keycode, state):
         if keyval == Gdk.KEY_Escape:

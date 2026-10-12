@@ -12,10 +12,89 @@ gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
+import cairo
 
 from snipr.models.capture_mode import CaptureMode
 from snipr.models.capture_result import CaptureResult
 from snipr.models.recording_state import RecordingState
+
+
+def _dismiss_active_popup() -> None:
+    """Send a synthetic Escape so any popup/menu holding a pointer grab closes.
+
+    Called right after we've captured — the popup is already baked into the
+    captured pixels, so dismissing the live window is lossless and lets
+    Snipr's preview receive clicks without the dropdown's grab swallowing
+    the first one.
+    """
+    try:
+        from Xlib import X, XK, display
+        from Xlib.ext import xtest
+    except Exception:
+        return
+    try:
+        d = display.Display()
+    except Exception:
+        return
+    try:
+        code = d.keysym_to_keycode(XK.XK_Escape)
+        xtest.fake_input(d, X.KeyPress, code)
+        d.sync()
+        xtest.fake_input(d, X.KeyRelease, code)
+        d.sync()
+    except Exception:
+        pass
+    finally:
+        try:
+            d.close()
+        except Exception:
+            pass
+
+
+def _crop_pixbuf(pb, x: int, y: int, w: int, h: int):
+    """Crop a frozen desktop pixbuf, with coords in root (whole-desktop) space.
+
+    The overlay snapshotted the screen before showing itself, so the
+    snapshot captures transient UI (dropdowns, menus) that would close
+    the moment focus leaves. Re-capturing live misses them.
+    """
+    if pb is None:
+        return None
+    sw, sh = pb.get_width(), pb.get_height()
+    cx = max(0, min(x, sw))
+    cy = max(0, min(y, sh))
+    cw = max(0, min(w, sw - cx))
+    ch = max(0, min(h, sh - cy))
+    if cw <= 0 or ch <= 0:
+        return None
+    return pb.new_subpixbuf(cx, cy, cw, ch).copy()
+
+
+def _mask_pixbuf(pb, x: int, y: int, w: int, h: int,
+                 points: list[tuple[int, int]]):
+    """Crop + polygon-mask a frozen pixbuf (freeform mode); coords in root space."""
+    cropped = _crop_pixbuf(pb, x, y, w, h)
+    if cropped is None or len(points) < 3:
+        return cropped
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return cropped
+    cw, ch = cropped.get_width(), cropped.get_height()
+    stride = cropped.get_rowstride()
+    channels = cropped.get_n_channels()
+    data = bytes(cropped.get_pixels())
+    mode = "RGBA" if channels == 4 else "RGB"
+    img = Image.frombytes(mode, (cw, ch), data, "raw", mode, stride).convert("RGBA")
+    mask = Image.new("L", (cw, ch), 0)
+    ImageDraw.Draw(mask).polygon([(px - x, py - y) for px, py in points], fill=255)
+    img.putalpha(mask)
+    out = img.tobytes()
+    return GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(out),
+        GdkPixbuf.Colorspace.RGB, True, 8,
+        cw, ch, cw * 4,
+    )
 
 
 AVAILABLE_MODES = [
@@ -63,9 +142,21 @@ class MainWindow(Adw.ApplicationWindow):
         # Adw.ToolbarView manages header bar + content for AdwApplicationWindow
         toolbar_view = Adw.ToolbarView()
 
-        # Header bar (just title + window controls)
+        # Header bar (title + window controls + preferences menu)
         header = Adw.HeaderBar()
         header.set_title_widget(Gtk.Label(label="Snipr"))
+
+        menu_btn = Gtk.MenuButton()
+        menu_btn.set_icon_name("open-menu-symbolic")
+        menu_btn.set_tooltip_text("Menu")
+        menu = Gio.Menu()
+        menu.append("Preferences", "win.preferences")
+        menu_btn.set_menu_model(menu)
+        header.pack_end(menu_btn)
+        pref_action = Gio.SimpleAction.new("preferences", None)
+        pref_action.connect("activate", self._on_preferences)
+        self.add_action(pref_action)
+
         toolbar_view.add_top_bar(header)
 
         # Toast overlay wraps content
@@ -123,7 +214,34 @@ class MainWindow(Adw.ApplicationWindow):
         self._preview_picture.set_can_shrink(True)
         self._preview_picture.set_content_fit(Gtk.ContentFit.CONTAIN)
         self._preview_picture.add_css_class("preview-image")
-        self._scroll.set_child(self._preview_picture)
+
+        # Overlay a transparent DrawingArea on top so the user can drag a
+        # crop rectangle. Save/Copy consult self._crop_rect to decide what
+        # gets exported.
+        self._preview_overlay = Gtk.Overlay()
+        self._preview_overlay.set_hexpand(True)
+        self._preview_overlay.set_vexpand(True)
+        self._preview_overlay.set_child(self._preview_picture)
+
+        self._crop_canvas = Gtk.DrawingArea()
+        self._crop_canvas.set_draw_func(self._on_crop_canvas_draw)
+        self._crop_canvas.set_cursor(Gdk.Cursor.new_from_name("crosshair", None))
+        self._preview_overlay.add_overlay(self._crop_canvas)
+
+        crop_click = Gtk.GestureClick()
+        crop_click.set_button(1)
+        crop_click.connect("pressed", self._on_crop_press)
+        crop_click.connect("released", self._on_crop_release)
+        self._crop_canvas.add_controller(crop_click)
+        crop_motion = Gtk.EventControllerMotion()
+        crop_motion.connect("motion", self._on_crop_motion)
+        self._crop_canvas.add_controller(crop_motion)
+
+        self._crop_dragging = False
+        self._crop_start = (0.0, 0.0)
+        self._crop_rect = None  # (x, y, w, h) in canvas (overlay) coords
+
+        self._scroll.set_child(self._preview_overlay)
 
         # Video player (hidden by default)
         self._video_player = Gtk.Video()
@@ -149,6 +267,11 @@ class MainWindow(Adw.ApplicationWindow):
         self._info_label.set_halign(Gtk.Align.START)
         info_bar.append(self._info_label)
 
+        self._reset_crop_btn = Gtk.Button(label="Clear crop")
+        self._reset_crop_btn.connect("clicked", self._on_reset_crop_clicked)
+        self._reset_crop_btn.set_sensitive(False)
+        info_bar.append(self._reset_crop_btn)
+
         self._copy_btn = Gtk.Button(label="Copy")
         self._copy_btn.connect("clicked", self._on_copy_clicked)
         info_bar.append(self._copy_btn)
@@ -164,6 +287,58 @@ class MainWindow(Adw.ApplicationWindow):
 
         self._preview_box.append(info_bar)
         self._main_box.append(self._preview_box)
+
+    def _on_preferences(self, *_args):
+        pref_win = Adw.PreferencesWindow(transient_for=self, modal=True)
+        pref_win.set_title("Snipr Preferences")
+        pref_win.set_default_size(500, 300)
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(title="Global hotkey")
+
+        hotkey_service = getattr(self._app, "hotkey_service", None)
+        available = bool(hotkey_service and hotkey_service.available)
+        if available:
+            group.set_description(
+                "Press this combo from anywhere to trigger a new capture. "
+                "Fires without raising Snipr — ideal for dropdowns and "
+                "transient menus. Empty disables. "
+                "Examples: Print, <Ctrl><Shift>s, <Super>a"
+            )
+        else:
+            group.set_description(
+                "Global hotkeys unavailable on this system. Install "
+                "gir1.2-keybinder-3.0 and run on X11 to enable."
+            )
+
+        row = Adw.EntryRow()
+        row.set_title("Accelerator")
+        row.set_text(self._app.config.get("global_hotkey", ""))
+        row.set_show_apply_button(True)
+        row.set_sensitive(available)
+
+        def _on_apply(entry):
+            accel = entry.get_text().strip()
+            prev = self._app.config.get("global_hotkey", "")
+            self._app.config["global_hotkey"] = accel
+            if self._app.apply_hotkey():
+                self._app.save_config()
+                msg = f"Hotkey set: {accel}" if accel else "Hotkey disabled"
+                self._toast_overlay.add_toast(Adw.Toast.new(msg))
+            else:
+                # Revert on failure (invalid or already-grabbed combo)
+                self._app.config["global_hotkey"] = prev
+                self._app.apply_hotkey()
+                entry.set_text(prev)
+                self._toast_overlay.add_toast(
+                    Adw.Toast.new(f"Could not bind: {accel}")
+                )
+
+        row.connect("apply", _on_apply)
+        group.add(row)
+        page.add(group)
+        pref_win.add(page)
+        pref_win.present()
 
     def _on_mode_changed(self, dropdown, _pspec):
         idx = dropdown.get_selected()
@@ -214,38 +389,52 @@ class MainWindow(Adw.ApplicationWindow):
 
         return False  # Don't repeat GLib.timeout
 
+    def _spawn_overlay(self, overlay_cls, on_selected, on_cancelled):
+        """Create one virtual-screen-spanning overlay with a shared frozen capture."""
+        frozen = self._app.capture_service.capture_fullscreen()
+        self._frozen_pixbuf = frozen
+        overlay = overlay_cls(
+            capture_service=self._app.capture_service,
+            on_selected=on_selected,
+            on_cancelled=on_cancelled,
+            pre_captured=frozen,
+        )
+        self._active_overlay = overlay
+        self._active_overlays = [overlay]
+        overlay.present()
+
     def _show_rectangle_overlay(self):
         from snipr.ui.rectangle_overlay import RectangleSelectionOverlay
-        self._active_overlay = RectangleSelectionOverlay(
-            capture_service=self._app.capture_service,
-            on_selected=self._on_rectangle_selected,
-            on_cancelled=self._on_overlay_cancelled,
+        self._spawn_overlay(
+            RectangleSelectionOverlay,
+            self._on_rectangle_selected,
+            self._on_overlay_cancelled,
         )
-        self._active_overlay.present()
 
     def _show_window_overlay(self):
         from snipr.ui.window_overlay import WindowSelectionOverlay
-        self._active_overlay = WindowSelectionOverlay(
-            capture_service=self._app.capture_service,
-            on_selected=self._on_window_selected,
-            on_cancelled=self._on_overlay_cancelled,
+        self._spawn_overlay(
+            WindowSelectionOverlay,
+            self._on_window_selected,
+            self._on_overlay_cancelled,
         )
-        self._active_overlay.present()
 
     def _show_freeform_overlay(self):
         from snipr.ui.freeform_overlay import FreeformSelectionOverlay
-        self._active_overlay = FreeformSelectionOverlay(
-            capture_service=self._app.capture_service,
-            on_selected=self._on_freeform_selected,
-            on_cancelled=self._on_overlay_cancelled,
+        self._spawn_overlay(
+            FreeformSelectionOverlay,
+            self._on_freeform_selected,
+            self._on_overlay_cancelled,
         )
-        self._active_overlay.present()
 
     def _capture_fullscreen(self):
         try:
             cs = self._app.capture_service
             if self._selected_mode.is_screenshot:
                 pixbuf = cs.capture_fullscreen()
+                # Dismiss any live popup/menu that was in the capture so its
+                # pointer grab doesn't swallow the first click in the preview.
+                _dismiss_active_popup()
                 self._last_result = CaptureResult(
                     mode=self._selected_mode,
                     screenshot=pixbuf,
@@ -262,11 +451,16 @@ class MainWindow(Adw.ApplicationWindow):
             self._show_error(f"Capture failed: {e}")
 
     def _on_rectangle_selected(self, x: int, y: int, w: int, h: int):
+        frozen = getattr(self, "_frozen_pixbuf", None)
+        self._frozen_pixbuf = None
         self._active_overlay = None
+        self._active_overlays = None
         try:
             cs = self._app.capture_service
             if self._selected_mode.is_screenshot:
-                pixbuf = cs.capture_region(x, y, w, h)
+                pixbuf = _crop_pixbuf(frozen, x, y, w, h)
+                if pixbuf is None:
+                    pixbuf = cs.capture_region(x, y, w, h)
                 self._last_result = CaptureResult(
                     mode=self._selected_mode,
                     screenshot=pixbuf,
@@ -283,17 +477,25 @@ class MainWindow(Adw.ApplicationWindow):
             self._show_error(f"Capture failed: {e}")
 
     def _on_window_selected(self, window_info):
+        frozen = getattr(self, "_frozen_pixbuf", None)
+        self._frozen_pixbuf = None
         self._active_overlay = None
+        self._active_overlays = None
         try:
             cs = self._app.capture_service
             if self._selected_mode.is_screenshot:
-                if hasattr(window_info, 'window_id') and hasattr(cs, 'capture_window'):
-                    pixbuf = cs.capture_window(window_info.window_id)
-                else:
-                    pixbuf = cs.capture_region(
-                        window_info.x, window_info.y,
-                        window_info.width, window_info.height,
-                    )
+                pixbuf = _crop_pixbuf(
+                    frozen, window_info.x, window_info.y,
+                    window_info.width, window_info.height,
+                )
+                if pixbuf is None:
+                    if hasattr(window_info, 'window_id') and hasattr(cs, 'capture_window'):
+                        pixbuf = cs.capture_window(window_info.window_id)
+                    else:
+                        pixbuf = cs.capture_region(
+                            window_info.x, window_info.y,
+                            window_info.width, window_info.height,
+                        )
                 self._last_result = CaptureResult(
                     mode=self._selected_mode,
                     screenshot=pixbuf,
@@ -315,10 +517,15 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_freeform_selected(self, x: int, y: int, w: int, h: int,
                                points: list[tuple[int, int]]):
+        frozen = getattr(self, "_frozen_pixbuf", None)
+        self._frozen_pixbuf = None
         self._active_overlay = None
+        self._active_overlays = None
         try:
             cs = self._app.capture_service
-            pixbuf = cs.capture_freeform(x, y, w, h, points)
+            pixbuf = _mask_pixbuf(frozen, x, y, w, h, points)
+            if pixbuf is None:
+                pixbuf = cs.capture_freeform(x, y, w, h, points)
             self._last_result = CaptureResult(
                 mode=self._selected_mode,
                 screenshot=pixbuf,
@@ -331,13 +538,18 @@ class MainWindow(Adw.ApplicationWindow):
             self._show_error(f"Capture failed: {e}")
 
     def _on_overlay_cancelled(self):
+        self._frozen_pixbuf = None
         self._active_overlay = None
+        self._active_overlays = None
         self.set_visible(True)
 
     def _show_preview(self):
         result = self._last_result
         if result is None:
             return
+
+        # Fresh capture — drop any previous crop selection.
+        self._reset_crop_state()
 
         self._video_saved = False
         new_w, new_h = 450, 400
@@ -392,6 +604,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._preview_box.set_visible(False)
         self._is_preview_visible = False
         self.set_resizable(False)
+        self._reset_crop_state()
         # Force shrink back to compact size
         self.set_default_size(450, -1)
         self.set_size_request(450, -1)
@@ -404,6 +617,137 @@ class MainWindow(Adw.ApplicationWindow):
                     os.remove(path)
                 except OSError:
                     pass
+
+    # --- Crop-in-preview ----------------------------------------------------
+
+    @staticmethod
+    def _layout_image(canvas_w: int, canvas_h: int, img_w: int, img_h: int):
+        """Compute scaled image placement inside a CONTAIN-fit widget."""
+        if img_w <= 0 or img_h <= 0 or canvas_w <= 0 or canvas_h <= 0:
+            return 0.0, 0.0, 1.0
+        scale = min(canvas_w / img_w, canvas_h / img_h)
+        disp_w = img_w * scale
+        disp_h = img_h * scale
+        return (canvas_w - disp_w) / 2.0, (canvas_h - disp_h) / 2.0, scale
+
+    def _crop_bounds_in_image_space(self):
+        """Convert self._crop_rect from canvas coords to image/pixbuf coords.
+
+        Returns (x, y, w, h) clamped to the pixbuf, or None if there's no
+        active selection or no screenshot.
+        """
+        if self._crop_rect is None:
+            return None
+        if self._last_result is None or not self._last_result.screenshot:
+            return None
+        pb = self._last_result.screenshot
+        pw, ph = pb.get_width(), pb.get_height()
+        cw = self._crop_canvas.get_width() or 1
+        ch = self._crop_canvas.get_height() or 1
+        ox, oy, scale = self._layout_image(cw, ch, pw, ph)
+        if scale <= 0:
+            return None
+        rx, ry, rw, rh = self._crop_rect
+        ix = max(0, int((rx - ox) / scale))
+        iy = max(0, int((ry - oy) / scale))
+        iw = max(0, int(rw / scale))
+        ih = max(0, int(rh / scale))
+        iw = min(iw, pw - ix)
+        ih = min(ih, ph - iy)
+        if iw <= 0 or ih <= 0:
+            return None
+        return ix, iy, iw, ih
+
+    def _effective_screenshot(self):
+        """Return the pixbuf that Save/Copy should export: cropped if a
+        selection is active, else the full screenshot."""
+        if self._last_result is None or not self._last_result.screenshot:
+            return None
+        bounds = self._crop_bounds_in_image_space()
+        if bounds is None:
+            return self._last_result.screenshot
+        ix, iy, iw, ih = bounds
+        return self._last_result.screenshot.new_subpixbuf(ix, iy, iw, ih).copy()
+
+    def _on_crop_canvas_draw(self, _area, ctx, width, height):
+        if self._crop_rect is None:
+            return
+        x, y, w, h = self._crop_rect
+        if w <= 0 or h <= 0:
+            return
+        # Dim outside the selection
+        ctx.set_source_rgba(0, 0, 0, 0.35)
+        ctx.rectangle(0, 0, width, height)
+        ctx.rectangle(x, y, w, h)
+        ctx.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+        ctx.fill()
+        # Selection border
+        ctx.set_source_rgba(0.2, 0.5, 1.0, 0.95)
+        ctx.set_line_width(2)
+        ctx.rectangle(x, y, w, h)
+        ctx.stroke()
+        # Dimensions label in image-space pixels
+        bounds = self._crop_bounds_in_image_space()
+        if bounds is not None:
+            _, _, iw, ih = bounds
+            label = f"{iw} x {ih}"
+            ctx.set_source_rgba(1, 1, 1, 0.95)
+            ctx.set_font_size(13)
+            ctx.move_to(x + 4, y - 6 if y > 20 else y + h + 16)
+            ctx.show_text(label)
+
+    def _on_crop_press(self, _gesture, _n_press, x, y):
+        if self._last_result is None or not self._last_result.screenshot:
+            return
+        self._crop_dragging = True
+        self._crop_start = (x, y)
+        self._crop_rect = (x, y, 0.0, 0.0)
+        self._crop_canvas.queue_draw()
+
+    def _on_crop_motion(self, _controller, x, y):
+        if not self._crop_dragging:
+            return
+        sx, sy = self._crop_start
+        self._crop_rect = (min(sx, x), min(sy, y), abs(x - sx), abs(y - sy))
+        self._crop_canvas.queue_draw()
+
+    def _on_crop_release(self, _gesture, _n_press, _x, _y):
+        if not self._crop_dragging:
+            return
+        self._crop_dragging = False
+        if self._crop_rect is not None:
+            _rx, _ry, rw, rh = self._crop_rect
+            if rw < 5 or rh < 5:
+                self._crop_rect = None
+        self._crop_canvas.queue_draw()
+        self._update_crop_ui()
+
+    def _on_reset_crop_clicked(self, _btn):
+        self._crop_rect = None
+        self._crop_canvas.queue_draw()
+        self._update_crop_ui()
+
+    def _update_crop_ui(self):
+        active = self._crop_rect is not None
+        self._reset_crop_btn.set_sensitive(active)
+        bounds = self._crop_bounds_in_image_space()
+        if self._last_result and self._last_result.screenshot:
+            pb = self._last_result.screenshot
+            pw, ph = pb.get_width(), pb.get_height()
+            if bounds is not None:
+                _, _, iw, ih = bounds
+                self._info_label.set_text(f"{pw} x {ph} • crop {iw} x {ih}")
+            else:
+                self._info_label.set_text(f"{pw} x {ph} pixels")
+
+    def _reset_crop_state(self):
+        self._crop_dragging = False
+        self._crop_rect = None
+        if hasattr(self, "_crop_canvas"):
+            self._crop_canvas.queue_draw()
+            self._update_crop_ui()
+
+    # ------------------------------------------------------------------------
 
     def _on_copy_clicked(self, btn):
         self.copy_to_clipboard()
@@ -420,7 +764,8 @@ class MainWindow(Adw.ApplicationWindow):
         if self._last_result is None:
             return
         if self._last_result.screenshot:
-            self._app.clipboard_service.copy_image(self._last_result.screenshot, self)
+            pb = self._effective_screenshot() or self._last_result.screenshot
+            self._app.clipboard_service.copy_image(pb, self)
         elif self._last_result.video_path:
             self._app.clipboard_service.copy_file_path(self._last_result.video_path, self)
 
@@ -473,7 +818,8 @@ class MainWindow(Adw.ApplicationWindow):
             file = dialog.save_finish(result)
             path = file.get_path()
             if self._last_result and self._last_result.screenshot:
-                if self._app.clipboard_service.save_pixbuf(self._last_result.screenshot, path):
+                pb = self._effective_screenshot() or self._last_result.screenshot
+                if self._app.clipboard_service.save_pixbuf(pb, path):
                     self._show_toast("Image saved successfully")
                 else:
                     self._show_error("Failed to save image")

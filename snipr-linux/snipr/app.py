@@ -6,7 +6,9 @@ gi.require_version("GdkPixbuf", "2.0")
 
 from gi.repository import Adw, Gio, GLib
 
+from snipr.services import config as snipr_config
 from snipr.services.display_server import get_display_server
+from snipr.services.hotkey import GlobalHotkeyService
 from snipr.services.screen_capture import create_screen_capture_service
 from snipr.services.clipboard import ClipboardService
 from snipr.services.video_recording import VideoRecordingService
@@ -22,6 +24,8 @@ class SniprApplication(Adw.Application):
         self.capture_service = None
         self.clipboard_service = None
         self.video_service = None
+        self.hotkey_service: GlobalHotkeyService | None = None
+        self.config: dict = snipr_config.load()
         self._main_window = None
 
     def do_startup(self):
@@ -30,16 +34,42 @@ class SniprApplication(Adw.Application):
         self._setup_theme()
         self._load_css()
 
+    def do_shutdown(self):
+        if self.hotkey_service is not None:
+            self.hotkey_service.shutdown()
+        Adw.Application.do_shutdown(self)
+
     def do_activate(self):
         if self._main_window is None:
             self.capture_service = create_screen_capture_service()
             self.clipboard_service = ClipboardService()
             self.video_service = VideoRecordingService(self.display_server)
+            self.hotkey_service = GlobalHotkeyService()
+            self.apply_hotkey()
 
             from snipr.ui.main_window import MainWindow
             self._main_window = MainWindow(application=self)
 
         self._main_window.present()
+
+    def apply_hotkey(self) -> bool:
+        """(Re-)bind the global hotkey from config. Returns True on success."""
+        if self.hotkey_service is None:
+            return False
+        return self.hotkey_service.set_hotkey(
+            self.config.get("global_hotkey", ""),
+            self._on_global_hotkey,
+        )
+
+    def save_config(self) -> None:
+        snipr_config.save(self.config)
+
+    def _on_global_hotkey(self) -> None:
+        # Hotkey fires without raising the main window — perfect for
+        # capturing dropdowns and other transient UI that would close
+        # when another window takes focus.
+        if self._main_window is not None:
+            self._main_window.start_new_capture()
 
     def _setup_actions(self):
         actions = [
