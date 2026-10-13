@@ -21,3 +21,6 @@ snipr = "snipr.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["snipr*"]
+
+[tool.setuptools.package-data]
+"snipr.resources" = ["*.css"]
