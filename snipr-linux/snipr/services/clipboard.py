@@ -8,7 +8,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 
-from gi.repository import Gdk, GdkPixbuf, Gio, Gtk
+from gi.repository import Gdk, GdkPixbuf, Gio, GObject, Gtk
 
 
 class ClipboardService:
@@ -16,7 +16,9 @@ class ClipboardService:
         """Copy a pixbuf image to the system clipboard."""
         clipboard = window.get_display().get_clipboard()
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-        content = Gdk.ContentProvider.new_for_value(texture)
+        # Declare the value as a Gdk.Texture: PyGObject would otherwise use the
+        # concrete subclass, which GTK can't convert, and offer no image formats
+        content = Gdk.ContentProvider.new_for_value(GObject.Value(Gdk.Texture, texture))
         clipboard.set_content(content)
 
     def copy_file_path(self, path: str, window: Gtk.Window) -> None:
